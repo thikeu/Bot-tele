@@ -2,8 +2,8 @@ name: 🤖 Trading Signal Bot - MEXC
 
 on:
   schedule:
-    # Chạy mỗi 15 phút (GitHub Actions giới hạn tối thiểu 5 phút)
-    - cron: '*/15 * * * *'
+    # Chạy mỗi 5 phút (GitHub Actions giới hạn tối thiểu 5 phút)
+    - cron: '*/5 * * * *'
   workflow_dispatch:  # Cho phép chạy thủ công từ GitHub UI
 
 jobs:
@@ -30,3 +30,11 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ACCOUNT_BALANCE: ${{ secrets.ACCOUNT_BALANCE }}
         run: python bot.py
+
+      - name: 🚨 Thông báo lỗi qua Telegram
+        if: failure()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d parse_mode="HTML" \
+            -d text="🚨 <b>BOT BỊ LỖI!</b>%0A❌ GitHub Actions gặp sự cố%0A🔗 Xem log: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}%0A⏰ $(date '+%Y-%m-%d %H:%M:%S')"
