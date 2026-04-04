@@ -294,10 +294,19 @@ if __name__ == "__main__":
         print("✅ Test hoàn thành. Kiểm tra Telegram của bạn!")
         sys.exit(0)
 
+
     if IS_GITHUB_ACTIONS:
         print("   ☁️  Chế độ: GitHub Actions (chạy 1 lần)")
+        # Gửi thông báo khởi động để xác nhận kết nối Telegram thông
+        startup_msg = (
+            f"🤖 <b>Bot Trading đang chạy!</b>\n"
+            f"☁️ GitHub Actions khởi động thành công\n"
+            f"<i>⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
+        )
+        send_telegram(startup_msg)
         run_one_cycle()
         sys.exit(0)
+
     else:
         print(f"   🔄 Chế độ: Loop local — mỗi {INTERVAL_MINUTES} phút | Ctrl+C để dừng\n")
         while True:
