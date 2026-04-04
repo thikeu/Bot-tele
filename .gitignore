@@ -1,0 +1,17 @@
+# Các file bí mật - KHÔNG commit lên GitHub!
+.env
+
+# Các thư mục Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Log
+*.log

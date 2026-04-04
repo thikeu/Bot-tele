@@ -1,0 +1,32 @@
+name: 🤖 Trading Signal Bot - MEXC
+
+on:
+  schedule:
+    # Chạy mỗi 15 phút (GitHub Actions giới hạn tối thiểu 5 phút)
+    - cron: '*/15 * * * *'
+  workflow_dispatch:  # Cho phép chạy thủ công từ GitHub UI
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Thiết lập Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Cài đặt thư viện
+        run: pip install -r requirements.txt
+
+      - name: 🚀 Chạy bot phân tích tín hiệu
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ACCOUNT_BALANCE: ${{ secrets.ACCOUNT_BALANCE }}
+        run: python bot.py
