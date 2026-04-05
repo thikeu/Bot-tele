@@ -33,14 +33,37 @@ ACCOUNT_BALANCE = float(os.environ.get('ACCOUNT_BALANCE', '1000'))
 RISK_PERCENT = 0.01   # Rủi ro 1% tài khoản
 RR_RATIO = 2.0        # Tỷ lệ TP:SL = 1:2
 
-# Dùng Binance (data công khai, không cần API Key)
-exchange = ccxt.binance({
+# Dùng Binance làm primary, Bybit làm fallback
+# (Binance hay block Azure IPs của GitHub Actions)
+exchange_binance = ccxt.binance({
+    'timeout': 30000,
+    'enableRateLimit': True,
+})
+exchange_bybit = ccxt.bybit({
     'timeout': 30000,
     'enableRateLimit': True,
 })
 
+def fetch_ohlcv_with_fallback(symbol: str, timeframe: str, limit: int):
+    """Thử Binance trước, nếu lỗi thì dùng Bybit."""
+    # Bybit dùng format BTCUSDT thay BTUSDT/USDT
+    bybit_symbol = symbol.replace('/', '')
+    try:
+        data = exchange_binance.fetch_ohlcv(symbol, timeframe, limit=limit)
+        if data:
+            return data
+    except Exception as e:
+        print(f"   ⚠️  Binance lỗi ({e}), thử Bybit...")
+    try:
+        data = exchange_bybit.fetch_ohlcv(bybit_symbol, timeframe, limit=limit)
+        return data
+    except Exception as e2:
+        raise Exception(f"Binance và Bybit đều lỗi: {e2}")
+
 # Biến lưu tóm tắt chỉ báo của coin vừa phân tích xong
 _last_summary = ""
+
+
 
 
 # ==========================================
@@ -158,12 +181,13 @@ def fetch_data_and_analyze(symbol: str):
     _last_summary = f"⚠️ <b>{symbol}</b>: lỗi kết nối"
 
     try:
-        ohlcv_1h = exchange.fetch_ohlcv(symbol, '1h', limit=100)
-        ohlcv_15m = exchange.fetch_ohlcv(symbol, '15m', limit=100)
+        ohlcv_1h = fetch_ohlcv_with_fallback(symbol, '1h', limit=100)
+        ohlcv_15m = fetch_ohlcv_with_fallback(symbol, '15m', limit=100)
     except Exception as e:
         print(f"❌ Lỗi lấy dữ liệu: {e}")
         _last_summary = f"⚠️ <b>{symbol}</b>: lỗi lấy data"
         return None
+
 
     if len(ohlcv_1h) < 60 or len(ohlcv_15m) < 20:
         print("⚠️  Không đủ dữ liệu.")
