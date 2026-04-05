@@ -32,38 +32,60 @@ ACCOUNT_BALANCE = float(os.environ.get('ACCOUNT_BALANCE', '1000'))
 RISK_PERCENT = 0.01   # Rủi ro 1% tài khoản
 RR_RATIO = 2.0        # Tỷ lệ TP:SL = 1:2
 
-# Dùng direct HTTP request thay ccxt để tránh bị block trên GitHub Actions
-BINANCE_HOSTS = [
-    'https://api.binance.com',
-    'https://api1.binance.com',
-    'https://api2.binance.com',
-]
+# OKX public API — không cần API key, không block GitHub Actions cloud IPs
+# interval mapping: '1h' -> '1H', '15m' -> '15m'
+OKX_BASE = 'https://www.okx.com'
+
+def _interval_to_okx(interval: str) -> str:
+    """Chuyển interval sang format OKX: '1h' -> '1H', '15m' -> '15m'"""
+    return interval.upper() if interval.endswith('h') else interval
 
 def fetch_ohlcv_direct(symbol: str, interval: str, limit: int = 100):
     """
-    Fetch OHLCV trực tiếp từ Binance REST API (bỏ qua ccxt).
-    Thử lần lượt 3 host mirror nếu bị block.
-    Trả về list [[timestamp, open, high, low, close, volume], ...]
+    Fetch OHLCV từ OKX public API.
+    Trả về list [[timestamp_ms, open, high, low, close, volume], ...]
+    OKX trả về newest-first nên cần reverse lại.
     """
-    bin_symbol = symbol.replace('/', '')  # BTC/USDT -> BTCUSDT
-    params = {'symbol': bin_symbol, 'interval': interval, 'limit': limit}
+    okx_symbol = symbol.replace('/', '-')   # BTC/USDT -> BTC-USDT
+    okx_bar = _interval_to_okx(interval)    # 1h -> 1H, 15m -> 15m
     headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'}
 
-    last_err = None
-    for host in BINANCE_HOSTS:
+    # Thử OKX trước
+    try:
+        resp = requests.get(
+            f"{OKX_BASE}/api/v5/market/candles",
+            params={'instId': okx_symbol, 'bar': okx_bar, 'limit': str(limit)},
+            headers=headers, timeout=20
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get('code') == '0' and data.get('data'):
+            raw = data['data']
+            # OKX format: [ts, open, high, low, close, vol, volCcy, ...]
+            # newest first → reverse
+            result = [[int(k[0]), float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5])] for k in raw]
+            result.reverse()
+            return result
+    except Exception as e:
+        print(f"   ⚠️  OKX lỗi: {e}, thử Binance...")
+
+    # Fallback: Binance direct REST
+    bin_symbol = symbol.replace('/', '')    # BTC/USDT -> BTCUSDT
+    for host in ['https://api.binance.com', 'https://api1.binance.com', 'https://api2.binance.com']:
         try:
             resp = requests.get(
                 f"{host}/api/v3/klines",
-                params=params, headers=headers, timeout=20
+                params={'symbol': bin_symbol, 'interval': interval, 'limit': limit},
+                headers=headers, timeout=20
             )
             resp.raise_for_status()
             raw = resp.json()
-            # Chuyển sang [[ts, open, high, low, close, vol], ...]
             return [[int(k[0]), float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5])] for k in raw]
-        except Exception as e:
-            last_err = e
-            print(f"   ⚠️  {host} lỗi: {e}")
-    raise Exception(f"Tất cả Binance hosts lỗi: {last_err}")
+        except Exception as e2:
+            print(f"   ⚠️  {host} lỗi: {e2}")
+
+    raise Exception(f"OKX và Binance đều không kết nối được")
+
 
 # Biến lưu tóm tắt chỉ báo của coin vừa phân tích xong
 _last_summary = ""
