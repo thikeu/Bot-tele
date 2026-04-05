@@ -154,15 +154,20 @@ def fetch_data_and_analyze(symbol: str):
     print(f"📊 Đang phân tích {symbol}...")
     print(f"⏰ {now_vn()} (UTC+7)")
 
+    global _last_summary
+    _last_summary = f"⚠️ <b>{symbol}</b>: lỗi kết nối"
+
     try:
         ohlcv_1h = exchange.fetch_ohlcv(symbol, '1h', limit=100)
         ohlcv_15m = exchange.fetch_ohlcv(symbol, '15m', limit=100)
     except Exception as e:
         print(f"❌ Lỗi lấy dữ liệu: {e}")
+        _last_summary = f"⚠️ <b>{symbol}</b>: lỗi lấy data"
         return None
 
     if len(ohlcv_1h) < 60 or len(ohlcv_15m) < 20:
         print("⚠️  Không đủ dữ liệu.")
+        _last_summary = f"⚠️ <b>{symbol}</b>: không đủ dữ liệu"
         return None
 
     cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
@@ -187,17 +192,25 @@ def fetch_data_and_analyze(symbol: str):
 
     if any(np.isnan(v) for v in [ema50, rsi_val, atr_val]):
         print("⚠️  Dữ liệu chỉ báo bị NaN. Bỏ qua.")
+        _last_summary = f"⚠️ <b>{symbol}</b>: NaN indicators"
         return None
-
-    print(f"   💰 Giá: {current_price:.4f}  |  EMA50(1H): {ema50:.4f}")
-    print(f"   ⚡ RSI: {rsi_val:.2f}  |  ATR: {atr_val:.4f}")
 
     is_uptrend   = last_1h['close'] > ema50
     is_downtrend = last_1h['close'] < ema50
     st_buy  = (prev_15m['st_dir'] == -1) and (last_15m['st_dir'] == 1)
     st_sell = (prev_15m['st_dir'] == 1)  and (last_15m['st_dir'] == -1)
 
+    trend_icon = "📈" if is_uptrend else "📉"
+    st_icon = "🔺" if float(last_15m['st_dir']) == 1 else "🔻"
+    # Luôn lưu summary ngay sau khi tính xong chỉ báo
+    _last_summary = (
+        f"{trend_icon} <b>{symbol}</b>: {current_price:.2f} | EMA50:{ema50:.2f}\n"
+        f"   RSI:{rsi_val:.1f} | ATR:{atr_val:.4f} | ST:{st_icon}"
+    )
+
     trend_txt = "📈 UPTREND" if is_uptrend else "📉 DOWNTREND"
+    print(f"   💰 Giá: {current_price:.4f}  |  EMA50(1H): {ema50:.4f}")
+    print(f"   ⚡ RSI: {rsi_val:.2f}  |  ATR: {atr_val:.4f}")
     print(f"   🔍 Xu hướng 1H: {trend_txt}  |  ST↑:{st_buy}  ST↓:{st_sell}")
 
     risk_amount = ACCOUNT_BALANCE * RISK_PERCENT
@@ -246,13 +259,6 @@ def fetch_data_and_analyze(symbol: str):
             send_telegram(msg)
             return "SHORT"
 
-    trend_icon = "📈" if is_uptrend else "📉"
-    st_icon = "🔺" if float(last_15m['st_dir']) == 1 else "🔻"
-    global _last_summary
-    _last_summary = (
-        f"<b>{symbol}</b>: {current_price:.2f} | {trend_icon} EMA50:{ema50:.2f}\n"
-        f"  RSI:{rsi_val:.1f} | ATR:{atr_val:.4f} | ST:{st_icon}"
-    )
     print(f"   ℹ️  Không có tín hiệu cho {symbol}.")
     return None
 
