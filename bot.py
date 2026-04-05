@@ -1,4 +1,3 @@
-import ccxt
 import pandas as pd
 import numpy as np
 import requests
@@ -33,37 +32,41 @@ ACCOUNT_BALANCE = float(os.environ.get('ACCOUNT_BALANCE', '1000'))
 RISK_PERCENT = 0.01   # Rủi ro 1% tài khoản
 RR_RATIO = 2.0        # Tỷ lệ TP:SL = 1:2
 
-# Dùng Binance làm primary, Bybit làm fallback
-# (Binance hay block Azure IPs của GitHub Actions)
-exchange_binance = ccxt.binance({
-    'timeout': 30000,
-    'enableRateLimit': True,
-})
-exchange_bybit = ccxt.bybit({
-    'timeout': 30000,
-    'enableRateLimit': True,
-})
+# Dùng direct HTTP request thay ccxt để tránh bị block trên GitHub Actions
+BINANCE_HOSTS = [
+    'https://api.binance.com',
+    'https://api1.binance.com',
+    'https://api2.binance.com',
+]
 
-def fetch_ohlcv_with_fallback(symbol: str, timeframe: str, limit: int):
-    """Thử Binance trước, nếu lỗi thì dùng Bybit."""
-    # Bybit dùng format BTCUSDT thay BTUSDT/USDT
-    bybit_symbol = symbol.replace('/', '')
-    try:
-        data = exchange_binance.fetch_ohlcv(symbol, timeframe, limit=limit)
-        if data:
-            return data
-    except Exception as e:
-        print(f"   ⚠️  Binance lỗi ({e}), thử Bybit...")
-    try:
-        data = exchange_bybit.fetch_ohlcv(bybit_symbol, timeframe, limit=limit)
-        return data
-    except Exception as e2:
-        raise Exception(f"Binance và Bybit đều lỗi: {e2}")
+def fetch_ohlcv_direct(symbol: str, interval: str, limit: int = 100):
+    """
+    Fetch OHLCV trực tiếp từ Binance REST API (bỏ qua ccxt).
+    Thử lần lượt 3 host mirror nếu bị block.
+    Trả về list [[timestamp, open, high, low, close, volume], ...]
+    """
+    bin_symbol = symbol.replace('/', '')  # BTC/USDT -> BTCUSDT
+    params = {'symbol': bin_symbol, 'interval': interval, 'limit': limit}
+    headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'}
+
+    last_err = None
+    for host in BINANCE_HOSTS:
+        try:
+            resp = requests.get(
+                f"{host}/api/v3/klines",
+                params=params, headers=headers, timeout=20
+            )
+            resp.raise_for_status()
+            raw = resp.json()
+            # Chuyển sang [[ts, open, high, low, close, vol], ...]
+            return [[int(k[0]), float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5])] for k in raw]
+        except Exception as e:
+            last_err = e
+            print(f"   ⚠️  {host} lỗi: {e}")
+    raise Exception(f"Tất cả Binance hosts lỗi: {last_err}")
 
 # Biến lưu tóm tắt chỉ báo của coin vừa phân tích xong
 _last_summary = ""
-
-
 
 
 # ==========================================
@@ -181,12 +184,13 @@ def fetch_data_and_analyze(symbol: str):
     _last_summary = f"⚠️ <b>{symbol}</b>: lỗi kết nối"
 
     try:
-        ohlcv_1h = fetch_ohlcv_with_fallback(symbol, '1h', limit=100)
-        ohlcv_15m = fetch_ohlcv_with_fallback(symbol, '15m', limit=100)
+        ohlcv_1h = fetch_ohlcv_direct(symbol, '1h', limit=100)
+        ohlcv_15m = fetch_ohlcv_direct(symbol, '15m', limit=100)
     except Exception as e:
         print(f"❌ Lỗi lấy dữ liệu: {e}")
         _last_summary = f"⚠️ <b>{symbol}</b>: lỗi lấy data"
         return None
+
 
 
     if len(ohlcv_1h) < 60 or len(ohlcv_15m) < 20:
