@@ -338,18 +338,9 @@ def run_one_cycle():
         for s in signals:
             print(f"   ✅ {s}")
     else:
-        # Gửi tóm tắt thị trường định kỳ dù không có tín hiệu
-        summary_lines = "\n".join(summaries)
-        msg = (
-            f"📊 <b>Tóm tắt thị trường</b>\n"
-            f"{'='*28}\n"
-            f"{summary_lines}\n"
-            f"{'='*28}\n"
-            f"<i>⏰ {now_vn()} (ICT) | Không có tín hiệu</i>"
-        )
-        send_telegram(msg)
-        print("ℹ️  Không có tín hiệu. Đã gửi tóm tắt Telegram.")
+        print("ℹ️  Không có tín hiệu lần này.")
     print("✅ Chu kỳ hoàn thành.\n")
+
 
 
 if __name__ == "__main__":
