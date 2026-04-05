@@ -4,11 +4,16 @@ import numpy as np
 import requests
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 # Tự động đọc file .env (nếu có) — dùng cho local dev
 load_dotenv()
+
+# Múi giờ Việt Nam UTC+7
+VN_TZ = timezone(timedelta(hours=7))
+def now_vn():
+    return datetime.now(VN_TZ).strftime('%Y-%m-%d %H:%M:%S')
 
 # Fix encoding emoji trên Windows PowerShell
 if hasattr(sys.stdout, 'reconfigure'):
@@ -29,11 +34,14 @@ RISK_PERCENT = 0.01   # Rủi ro 1% tài khoản
 RR_RATIO = 2.0        # Tỷ lệ TP:SL = 1:2
 
 # Dùng Binance (data công khai, không cần API Key)
-# MEXC thường bị block DNS tại Việt Nam
 exchange = ccxt.binance({
     'timeout': 30000,
     'enableRateLimit': True,
 })
+
+# Biến lưu tóm tắt chỉ báo của coin vừa phân tích xong
+_last_summary = ""
+
 
 # ==========================================
 # 2. TÍNH TOÁN CHỈ BÁO (Thuần Pandas/NumPy)
@@ -144,7 +152,7 @@ def send_telegram(message: str):
 def fetch_data_and_analyze(symbol: str):
     print(f"\n{'='*50}")
     print(f"📊 Đang phân tích {symbol}...")
-    print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"⏰ {now_vn()} (UTC+7)")
 
     try:
         ohlcv_1h = exchange.fetch_ohlcv(symbol, '1h', limit=100)
@@ -211,7 +219,7 @@ def fetch_data_and_analyze(symbol: str):
                 f"{'='*30}\n"
                 f"RSI: {rsi_val:.1f} | ATR: {atr_val:.4f} | EMA50: {ema50:.4f}\n"
                 f"<i>⚠️ Rủi ro: {risk_amount:.2f}$ ({RISK_PERCENT*100:.0f}%)</i>\n"
-                f"<i>⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
+                f"<i>⏰ {now_vn()} (ICT)</i>"
             )
             send_telegram(msg)
             return "LONG"
@@ -233,11 +241,18 @@ def fetch_data_and_analyze(symbol: str):
                 f"{'='*30}\n"
                 f"RSI: {rsi_val:.1f} | ATR: {atr_val:.4f} | EMA50: {ema50:.4f}\n"
                 f"<i>⚠️ Rủi ro: {risk_amount:.2f}$ ({RISK_PERCENT*100:.0f}%)</i>\n"
-                f"<i>⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
+                f"<i>⏰ {now_vn()} (ICT)</i>"
             )
             send_telegram(msg)
             return "SHORT"
 
+    trend_icon = "📈" if is_uptrend else "📉"
+    st_icon = "🔺" if float(last_15m['st_dir']) == 1 else "🔻"
+    global _last_summary
+    _last_summary = (
+        f"<b>{symbol}</b>: {current_price:.2f} | {trend_icon} EMA50:{ema50:.2f}\n"
+        f"  RSI:{rsi_val:.1f} | ATR:{atr_val:.4f} | ST:{st_icon}"
+    )
     print(f"   ℹ️  Không có tín hiệu cho {symbol}.")
     return None
 
@@ -248,13 +263,18 @@ def fetch_data_and_analyze(symbol: str):
 def run_one_cycle():
     """Chạy 1 chu kỳ phân tích toàn bộ SYMBOLS."""
     signals = []
+    summaries = []  # Tóm tắt chỉ báo để gửi Telegram
+
     for sym in SYMBOLS:
         try:
-            r = fetch_data_and_analyze(sym)
-            if r:
-                signals.append(f"{sym}: {r}")
+            result = fetch_data_and_analyze(sym)
+            if result:
+                signals.append(f"{sym}: {result}")
+            # Thu thập tóm tắt chỉ báo từ lần phân tích vừa rồi
+            summaries.append(_last_summary)
         except Exception as e:
             print(f"❌ Lỗi {sym}: {e}")
+            summaries.append(f"❌ {sym}: lỗi")
 
     print(f"\n{'='*50}")
     if signals:
@@ -262,7 +282,17 @@ def run_one_cycle():
         for s in signals:
             print(f"   ✅ {s}")
     else:
-        print("ℹ️  Không có tín hiệu lần này.")
+        # Gửi tóm tắt thị trường định kỳ dù không có tín hiệu
+        summary_lines = "\n".join(summaries)
+        msg = (
+            f"📊 <b>Tóm tắt thị trường</b>\n"
+            f"{'='*28}\n"
+            f"{summary_lines}\n"
+            f"{'='*28}\n"
+            f"<i>⏰ {now_vn()} (ICT) | Không có tín hiệu</i>"
+        )
+        send_telegram(msg)
+        print("ℹ️  Không có tín hiệu. Đã gửi tóm tắt Telegram.")
     print("✅ Chu kỳ hoàn thành.\n")
 
 
@@ -297,13 +327,6 @@ if __name__ == "__main__":
 
     if IS_GITHUB_ACTIONS:
         print("   ☁️  Chế độ: GitHub Actions (chạy 1 lần)")
-        # Gửi thông báo khởi động để xác nhận kết nối Telegram thông
-        startup_msg = (
-            f"🤖 <b>Bot Trading đang chạy!</b>\n"
-            f"☁️ GitHub Actions khởi động thành công\n"
-            f"<i>⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
-        )
-        send_telegram(startup_msg)
         run_one_cycle()
         sys.exit(0)
 
