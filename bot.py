@@ -247,12 +247,20 @@ def fetch_data_and_analyze(symbol: str):
 
     is_uptrend   = last_1h['close'] > ema50
     is_downtrend = last_1h['close'] < ema50
-    st_buy  = (prev_15m['st_dir'] == -1) and (last_15m['st_dir'] == 1)
-    st_sell = (prev_15m['st_dir'] == 1)  and (last_15m['st_dir'] == -1)
+
+    # RSI nến trước (để phát hiện crossover RSI)
+    rsi_prev = float(prev_15m['rsi']) if not np.isnan(prev_15m['rsi']) else rsi_val
+
+    # Hướng SuperTrend hiện tại (không cần crossover, chỉ cần hướng đang là gì)
+    st_is_bull = (float(last_15m['st_dir']) == 1)   # ST đang bullish🔺
+    st_is_bear = (float(last_15m['st_dir']) == -1)  # ST đang bearish🔻
+
+    # RSI momentum crossover — tránh spam: chỉ bắn khi RSI vừa qua ngưỡng
+    rsi_cross_up   = (rsi_prev < 50) and (rsi_val >= 50)   # RSI vừa vượt 50 lên
+    rsi_cross_down = (rsi_prev > 50) and (rsi_val <= 50)   # RSI vừa xuống dưới 50
 
     trend_icon = "📈" if is_uptrend else "📉"
-    st_icon = "🔺" if float(last_15m['st_dir']) == 1 else "🔻"
-    # Luôn lưu summary ngay sau khi tính xong chỉ báo
+    st_icon = "🔺" if st_is_bull else "🔻"
     _last_summary = (
         f"{trend_icon} <b>{symbol}</b>: {current_price:.2f} | EMA50:{ema50:.2f}\n"
         f"   RSI:{rsi_val:.1f} | ATR:{atr_val:.4f} | ST:{st_icon}"
@@ -260,13 +268,15 @@ def fetch_data_and_analyze(symbol: str):
 
     trend_txt = "📈 UPTREND" if is_uptrend else "📉 DOWNTREND"
     print(f"   💰 Giá: {current_price:.4f}  |  EMA50(1H): {ema50:.4f}")
-    print(f"   ⚡ RSI: {rsi_val:.2f}  |  ATR: {atr_val:.4f}")
-    print(f"   🔍 Xu hướng 1H: {trend_txt}  |  ST↑:{st_buy}  ST↓:{st_sell}")
+    print(f"   ⚡ RSI: {rsi_val:.2f}→{rsi_cross_up}/{rsi_cross_down}  |  ATR: {atr_val:.4f}")
+    print(f"   🔍 Xu hướng 1H: {trend_txt}  |  ST:{'🔺' if st_is_bull else '🔻'}")
 
     risk_amount = ACCOUNT_BALANCE * RISK_PERCENT
 
     # ---- LONG ----
-    if st_buy and is_uptrend and rsi_val < 70:
+    # Điều kiện: SuperTrend ĐANG bullish 🔺 + RSI vừa vượt 50 lên (momentum xác nhận)
+    # Bỏ filter EMA50 chặt, chỉ cần không downtrend rõ ràng
+    if st_is_bull and rsi_cross_up and rsi_val < 70:
         sl_price = df_15m['low'].tail(10).min() - atr_val * 0.5
         dist = current_price - sl_price
         if dist > 0:
@@ -288,7 +298,8 @@ def fetch_data_and_analyze(symbol: str):
             return "LONG"
 
     # ---- SHORT ----
-    elif st_sell and is_downtrend and rsi_val > 30:
+    # Điều kiện: SuperTrend ĐANG bearish 🔻 + RSI vừa rơi xuống dưới 50 (momentum xác nhận)
+    if st_is_bear and rsi_cross_down and rsi_val > 30:
         sl_price = df_15m['high'].tail(10).max() + atr_val * 0.5
         dist = sl_price - current_price
         if dist > 0:
@@ -311,6 +322,8 @@ def fetch_data_and_analyze(symbol: str):
 
     print(f"   ℹ️  Không có tín hiệu cho {symbol}.")
     return None
+
+
 
 
 # ==========================================
