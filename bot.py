@@ -121,58 +121,13 @@ def calc_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14
     return tr.ewm(span=period, adjust=False).mean()
 
 
-def calc_supertrend(high: pd.Series, low: pd.Series, close: pd.Series,
-                    period: int = 10, multiplier: float = 3.0):
-    """
-    Tính SuperTrend.
-    Trả về Series direction: 1 = uptrend (giá trên ST), -1 = downtrend.
-    """
-    atr = calc_atr(high, low, close, period)
-    hl_avg = (high + low) / 2
-
-    upper_band = hl_avg + multiplier * atr
-    lower_band = hl_avg - multiplier * atr
-
-    # Tính supertrend iteratively
-    direction = pd.Series(index=close.index, dtype=float)
-    supertrend = pd.Series(index=close.index, dtype=float)
-
-    for i in range(1, len(close)):
-        # Lower band (support khi uptrend)
-        if lower_band.iloc[i] > lower_band.iloc[i - 1] or close.iloc[i - 1] < lower_band.iloc[i - 1]:
-            lb = lower_band.iloc[i]
-        else:
-            lb = lower_band.iloc[i - 1]
-
-        # Upper band (resistance khi downtrend)
-        if upper_band.iloc[i] < upper_band.iloc[i - 1] or close.iloc[i - 1] > upper_band.iloc[i - 1]:
-            ub = upper_band.iloc[i]
-        else:
-            ub = upper_band.iloc[i - 1]
-
-        lower_band.iloc[i] = lb
-        upper_band.iloc[i] = ub
-
-        # Xác định hướng
-        prev_st = supertrend.iloc[i - 1] if i > 1 else ub
-        if prev_st == upper_band.iloc[i - 1]:
-            # Đang downtrend
-            if close.iloc[i] > ub:
-                direction.iloc[i] = 1
-                supertrend.iloc[i] = lb
-            else:
-                direction.iloc[i] = -1
-                supertrend.iloc[i] = ub
-        else:
-            # Đang uptrend
-            if close.iloc[i] < lb:
-                direction.iloc[i] = -1
-                supertrend.iloc[i] = ub
-            else:
-                direction.iloc[i] = 1
-                supertrend.iloc[i] = lb
-
-    return direction
+def calc_bollinger_bands(close: pd.Series, period: int = 20, num_std: float = 2.0):
+    """Tính Bollinger Bands."""
+    sma = close.rolling(window=period).mean()
+    std = close.rolling(window=period).std()
+    upper_band = sma + (std * num_std)
+    lower_band = sma - (std * num_std)
+    return lower_band, upper_band
 
 
 # ==========================================
@@ -199,7 +154,7 @@ def send_telegram(message: str):
 # ==========================================
 def fetch_data_and_analyze(symbol: str):
     print(f"\n{'='*50}")
-    print(f"📊 Đang phân tích {symbol}...")
+    print(f"📊 Đang phân tích {symbol} (Chiến lược BB/RSI 5m + Xu hướng 1H)...")
     print(f"⏰ {now_vn()} (UTC+7)")
 
     global _last_summary
@@ -208,14 +163,13 @@ def fetch_data_and_analyze(symbol: str):
     try:
         ohlcv_1h = fetch_ohlcv_direct(symbol, '1h', limit=100)
         ohlcv_15m = fetch_ohlcv_direct(symbol, '15m', limit=100)
+        ohlcv_5m = fetch_ohlcv_direct(symbol, '5m', limit=100)
     except Exception as e:
         print(f"❌ Lỗi lấy dữ liệu: {e}")
         _last_summary = f"⚠️ <b>{symbol}</b>: lỗi lấy data"
         return None
 
-
-
-    if len(ohlcv_1h) < 60 or len(ohlcv_15m) < 20:
+    if len(ohlcv_1h) < 60 or len(ohlcv_15m) < 20 or len(ohlcv_5m) < 30:
         print("⚠️  Không đủ dữ liệu.")
         _last_summary = f"⚠️ <b>{symbol}</b>: không đủ dữ liệu"
         return None
@@ -223,24 +177,28 @@ def fetch_data_and_analyze(symbol: str):
     cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
     df_1h = pd.DataFrame(ohlcv_1h, columns=cols).astype({'open': float, 'high': float, 'low': float, 'close': float})
     df_15m = pd.DataFrame(ohlcv_15m, columns=cols).astype({'open': float, 'high': float, 'low': float, 'close': float})
+    df_5m = pd.DataFrame(ohlcv_5m, columns=cols).astype({'open': float, 'high': float, 'low': float, 'close': float})
 
     # Tính chỉ báo
     df_1h['ema_50'] = calc_ema(df_1h['close'], 50)
-    df_15m['rsi'] = calc_rsi(df_15m['close'], 14)
     df_15m['atr'] = calc_atr(df_15m['high'], df_15m['low'], df_15m['close'], 14)
-    df_15m['st_dir'] = calc_supertrend(df_15m['high'], df_15m['low'], df_15m['close'], 10, 3.0)
+    # 5m
+    df_5m['rsi'] = calc_rsi(df_5m['close'], 14)
+    df_5m['bb_lower'], df_5m['bb_upper'] = calc_bollinger_bands(df_5m['close'], 20, 2.0)
 
-    # Nến đã đóng gần nhất (iloc[-2]) và trước đó (iloc[-3])
+    # Nến đã đóng gần nhất
     last_1h  = df_1h.iloc[-2]
     last_15m = df_15m.iloc[-2]
-    prev_15m = df_15m.iloc[-3]
+    last_5m = df_5m.iloc[-2]
 
-    current_price = float(last_15m['close'])
+    current_price = float(last_5m['close'])
     ema50   = float(last_1h['ema_50'])
-    rsi_val = float(last_15m['rsi'])
     atr_val = float(last_15m['atr'])
+    rsi_val = float(last_5m['rsi'])
+    bb_lower = float(last_5m['bb_lower'])
+    bb_upper = float(last_5m['bb_upper'])
 
-    if any(np.isnan(v) for v in [ema50, rsi_val, atr_val]):
+    if any(np.isnan(v) for v in [ema50, rsi_val, atr_val, bb_lower, bb_upper]):
         print("⚠️  Dữ liệu chỉ báo bị NaN. Bỏ qua.")
         _last_summary = f"⚠️ <b>{symbol}</b>: NaN indicators"
         return None
@@ -248,77 +206,85 @@ def fetch_data_and_analyze(symbol: str):
     is_uptrend   = last_1h['close'] > ema50
     is_downtrend = last_1h['close'] < ema50
 
-    # RSI nến trước (để phát hiện crossover RSI)
-    rsi_prev = float(prev_15m['rsi']) if not np.isnan(prev_15m['rsi']) else rsi_val
-
-    # Hướng SuperTrend hiện tại (không cần crossover, chỉ cần hướng đang là gì)
-    st_is_bull = (float(last_15m['st_dir']) == 1)   # ST đang bullish🔺
-    st_is_bear = (float(last_15m['st_dir']) == -1)  # ST đang bearish🔻
-
-    # RSI momentum crossover — tránh spam: chỉ bắn khi RSI vừa qua ngưỡng
-    rsi_cross_up   = (rsi_prev < 50) and (rsi_val >= 50)   # RSI vừa vượt 50 lên
-    rsi_cross_down = (rsi_prev > 50) and (rsi_val <= 50)   # RSI vừa xuống dưới 50
-
     trend_icon = "📈" if is_uptrend else "📉"
-    st_icon = "🔺" if st_is_bull else "🔻"
     _last_summary = (
-        f"{trend_icon} <b>{symbol}</b>: {current_price:.2f} | EMA50:{ema50:.2f}\n"
-        f"   RSI:{rsi_val:.1f} | ATR:{atr_val:.4f} | ST:{st_icon}"
+        f"{trend_icon} <b>{symbol}</b>: {current_price:.2f} | EMA50(1H):{ema50:.2f}\n"
+        f"   RSI(5m):{rsi_val:.1f} | BB_L:{bb_lower:.2f} | BB_U:{bb_upper:.2f}"
     )
 
     trend_txt = "📈 UPTREND" if is_uptrend else "📉 DOWNTREND"
-    print(f"   💰 Giá: {current_price:.4f}  |  EMA50(1H): {ema50:.4f}")
-    print(f"   ⚡ RSI: {rsi_val:.2f}→{rsi_cross_up}/{rsi_cross_down}  |  ATR: {atr_val:.4f}")
-    print(f"   🔍 Xu hướng 1H: {trend_txt}  |  ST:{'🔺' if st_is_bull else '🔻'}")
+    print(f"   💰 Giá(5m): {current_price:.4f}  |  EMA50(1H): {ema50:.4f}")
+    print(f"   ⚡ RSI(5m): {rsi_val:.2f} | BB lower: {bb_lower:.4f} | BB upper: {bb_upper:.4f}")
+    print(f"   🔍 Xu hướng 1H: {trend_txt}")
 
     risk_amount = ACCOUNT_BALANCE * RISK_PERCENT
 
+    # Xét giá trị nến 5m gần nhất
+    touched_lower = float(last_5m['low']) <= bb_lower
+    touched_upper = float(last_5m['high']) >= bb_upper
+
     # ---- LONG ----
-    # Điều kiện: SuperTrend ĐANG bullish 🔺 + RSI vừa vượt 50 lên (momentum xác nhận)
-    # Bỏ filter EMA50 chặt, chỉ cần không downtrend rõ ràng
-    if st_is_bull and rsi_cross_up and rsi_val < 70:
-        sl_price = df_15m['low'].tail(10).min() - atr_val * 0.5
-        dist = current_price - sl_price
-        if dist > 0:
-            tp_price = current_price + dist * RR_RATIO
-            volume   = risk_amount / dist
-            msg = (
-                f"🟢 <b>TÍN HIỆU LONG: {symbol}</b>\n"
-                f"{'='*30}\n"
-                f"📌 Entry: <b>{current_price:.4f}</b>\n"
-                f"🛑 SL:    <b>{sl_price:.4f}</b> (-{dist/current_price*100:.2f}%)\n"
-                f"🎯 TP 1:{RR_RATIO}: <b>{tp_price:.4f}</b> (+{(tp_price-current_price)/current_price*100:.2f}%)\n"
-                f"⚖️ Khối lượng: <b>{volume:.4f} {symbol.split('/')[0]}</b>\n"
-                f"{'='*30}\n"
-                f"RSI: {rsi_val:.1f} | ATR: {atr_val:.4f} | EMA50: {ema50:.4f}\n"
-                f"<i>⚠️ Rủi ro: {risk_amount:.2f}$ ({RISK_PERCENT*100:.0f}%)</i>\n"
-                f"<i>⏰ {now_vn()} (ICT)</i>"
-            )
-            send_telegram(msg)
-            return "LONG"
+    # Trend 1H Tăng + Nến 5m đâm xuống BB lower + RSI quá bán
+    long_cond = is_uptrend and touched_lower and rsi_val < 35
 
     # ---- SHORT ----
-    # Điều kiện: SuperTrend ĐANG bearish 🔻 + RSI vừa rơi xuống dưới 50 (momentum xác nhận)
-    if st_is_bear and rsi_cross_down and rsi_val > 30:
-        sl_price = df_15m['high'].tail(10).max() + atr_val * 0.5
-        dist = sl_price - current_price
-        if dist > 0:
-            tp_price = current_price - dist * RR_RATIO
-            volume   = risk_amount / dist
-            msg = (
-                f"🔴 <b>TÍN HIỆU SHORT: {symbol}</b>\n"
-                f"{'='*30}\n"
-                f"📌 Entry: <b>{current_price:.4f}</b>\n"
-                f"🛑 SL:    <b>{sl_price:.4f}</b> (+{dist/current_price*100:.2f}%)\n"
-                f"🎯 TP 1:{RR_RATIO}: <b>{tp_price:.4f}</b> (-{(current_price-tp_price)/current_price*100:.2f}%)\n"
-                f"⚖️ Khối lượng: <b>{volume:.4f} {symbol.split('/')[0]}</b>\n"
-                f"{'='*30}\n"
-                f"RSI: {rsi_val:.1f} | ATR: {atr_val:.4f} | EMA50: {ema50:.4f}\n"
-                f"<i>⚠️ Rủi ro: {risk_amount:.2f}$ ({RISK_PERCENT*100:.0f}%)</i>\n"
-                f"<i>⏰ {now_vn()} (ICT)</i>"
-            )
-            send_telegram(msg)
-            return "SHORT"
+    # Trend 1H Giảm + Nến 5m đâm lên BB upper + RSI quá mua
+    short_cond = is_downtrend and touched_upper and rsi_val > 65
+
+    if long_cond:
+        # SL = 1.5 * ATR (15m) để tránh râu nến quét lãng xẹt
+        sl_dist = atr_val * 1.5
+        sl_price = current_price - sl_dist
+        tp1_price = current_price + sl_dist * 1.0 # 1:1
+        tp2_price = current_price + sl_dist * 2.0 # 1:2
+        tp3_price = current_price + sl_dist * 3.0 # 1:3
+        
+        volume = risk_amount / sl_dist
+        msg = (
+            f"🟢 <b>TÍN HIỆU LONG (Buy the Dip): {symbol}</b>\n"
+            f"{'='*30}\n"
+            f"📌 Entry (5m): <b>{current_price:.4f}</b>\n"
+            f"🛑 SL: <b>{sl_price:.4f}</b> (-{sl_dist/current_price*100:.2f}%)\n"
+            f"⚖️ Khối lượng: <b>{volume:.4f} {symbol.split('/')[0]}</b>\n"
+            f"{'='*30}\n"
+            f"🎯 <b>CÁC MỐC CHỐT LỜI (Scaled TPs):</b>\n"
+            f"✅ <b>TP1 (50% Volume): {tp1_price:.4f}</b> (RR 1:1 - dời SL về Hoà vốn)\n"
+            f"✅ <b>TP2 (25% Volume): {tp2_price:.4f}</b> (RR 1:2)\n"
+            f"✅ <b>TP3 (25% Volume): {tp3_price:.4f}</b> (RR 1:3)\n"
+            f"{'='*30}\n"
+            f"RSI(5m): {rsi_val:.1f} | ATR(15m): {atr_val:.4f} | EMA50(1H): {ema50:.4f}\n"
+            f"<i>⚠️ Rủi ro: {risk_amount:.2f}$ ({RISK_PERCENT*100:.0f}%)</i>\n"
+            f"<i>⏰ {now_vn()} (ICT)</i>"
+        )
+        send_telegram(msg)
+        return "LONG"
+
+    elif short_cond:
+        sl_dist = atr_val * 1.5
+        sl_price = current_price + sl_dist
+        tp1_price = current_price - sl_dist * 1.0
+        tp2_price = current_price - sl_dist * 2.0
+        tp3_price = current_price - sl_dist * 3.0
+        
+        volume = risk_amount / sl_dist
+        msg = (
+            f"🔴 <b>TÍN HIỆU SHORT (Sell the Rally): {symbol}</b>\n"
+            f"{'='*30}\n"
+            f"📌 Entry (5m): <b>{current_price:.4f}</b>\n"
+            f"🛑 SL: <b>{sl_price:.4f}</b> (+{sl_dist/current_price*100:.2f}%)\n"
+            f"⚖️ Khối lượng: <b>{volume:.4f} {symbol.split('/')[0]}</b>\n"
+            f"{'='*30}\n"
+            f"🎯 <b>CÁC MỐC CHỐT LỜI (Scaled TPs):</b>\n"
+            f"✅ <b>TP1 (50% Volume): {tp1_price:.4f}</b> (RR 1:1 - dời SL về Hoà vốn)\n"
+            f"✅ <b>TP2 (25% Volume): {tp2_price:.4f}</b> (RR 1:2)\n"
+            f"✅ <b>TP3 (25% Volume): {tp3_price:.4f}</b> (RR 1:3)\n"
+            f"{'='*30}\n"
+            f"RSI(5m): {rsi_val:.1f} | ATR(15m): {atr_val:.4f} | EMA50(1H): {ema50:.4f}\n"
+            f"<i>⚠️ Rủi ro: {risk_amount:.2f}$ ({RISK_PERCENT*100:.0f}%)</i>\n"
+            f"<i>⏰ {now_vn()} (ICT)</i>"
+        )
+        send_telegram(msg)
+        return "SHORT"
 
     print(f"   ℹ️  Không có tín hiệu cho {symbol}.")
     return None
